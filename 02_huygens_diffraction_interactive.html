@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Huygens Diffraction — Interactive Explorer</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { 
+            font-family: 'Segoe UI', sans-serif; 
+            margin: 0; padding: 20px; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .container { 
+            max-width: 1400px; margin: 0 auto; 
+            background: rgba(255,255,255,0.95); 
+            border-radius: 20px; padding: 30px; 
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        h1 { text-align: center; color: #2c3e50; margin-bottom: 10px; }
+        .subtitle { text-align: center; color: #7f8c8d; margin-bottom: 30px; font-size: 1.2em; }
+        .controls { 
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
+            gap: 20px; margin: 30px 0; padding: 25px; 
+            background: #f8f9fa; border-radius: 15px; 
+        }
+        .control { text-align: center; }
+        .control label { display: block; margin-bottom: 8px; font-weight: bold; color: #34495e; }
+        input[type="range"] { width: 100%; height: 8px; border-radius: 5px; 
+                              background: #ecf0f1; outline: none; }
+        input[type="range"]::-webkit-slider-thumb { 
+            appearance: none; width: 25px; height: 25px; 
+            border-radius: 50%; background: #3498db; cursor: pointer; }
+        input[type="checkbox"] { transform: scale(1.5); margin-right: 10px; }
+        canvas { 
+            width: 100%; height: 500px; border: 2px solid #34495e; 
+            border-radius: 10px; background: #eaf2f8; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        .info { 
+            margin-top: 25px; padding: 20px; background: #e8f4fd; 
+            border-radius: 10px; border-left: 5px solid #3498db;
+        }
+        .lambda-display { font-size: 1.3em; font-weight: bold; color: #27ae60; }
+        .physics-rule { 
+            background: #fff3cd; padding: 15px; border-radius: 8px; 
+            border-left: 5px solid #ffc107; margin-top: 15px;
+            font-family: 'Consolas', monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1> Huygens' Diffraction Explorer</h1>
+        <p class="subtitle">DHBW Mobile Communications — Interactive Visualization</p>
+
+        <div class="controls">
+            <div class="control">
+                <label for="time">Time step (t): <span id="time-val">0.9</span></label>
+                <input type="range" id="time" min="0.1" max="1.5" step="0.05" value="0.9">
+            </div>
+            <div class="control">
+                <label for="freq">Rel. frequency: <span id="freq-val">1.0</span></label>
+                <input type="range" id="freq" min="0.3" max="3.0" step="0.1" value="1.0">
+            </div>
+            <div class="control">
+                <label for="arrows">Incident arrows: <span id="arrows-val">8</span></label>
+                <input type="range" id="arrows" min="3" max="15" step="1" value="8">
+            </div>
+            <div class="control">
+                <label>
+                    <input type="checkbox" id="shadow" checked> Show shadow region
+                </label>
+                <label>
+                    <input type="checkbox" id="env" checked> Show wavefront envelope
+                </label>
+            </div>
+        </div>
+
+        <canvas id="canvas"></canvas>
+
+        <div class="info">
+            <h3>📊 Live Physics Summary</h3>
+            <div class="lambda-display">
+                λ_rel = <span id="lambda-display">-</span>
+                | N_wavelets = <span id="n-wavelets">-</span>
+            </div>
+            <p id="physics-summary">
+                Drag sliders to explore how wavelength affects diffraction...
+            </p>
+            <div class="physics-rule">
+                <strong>Physical Rule:</strong> All spacings use λ_rel = 0.65 / f_rel<br>
+                • Left wavefronts → λ spacing<br>
+                • Right lit wavefronts → λ spacing (top region)<br>
+                • Huygens arcs → radii λ, 2λ, 3λ... (bottom shadow region)
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 1200;
+        canvas.height = 500;
+
+        // ── PARAMETERS ──
+        const wall_x = 450;        // Middle of canvas
+        const edge_y = 250;        // Wall tip
+        const wall_top = 50;       // Wall starts here (top region blocked? No)
+        const wall_bot = 450;      // Wall bottom
+        const scale = 1.5;
+
+        let t = 0.9, freq = 1.0, n_arrows = 8, show_shadow = true, show_env = true;
+
+        function updateDisplays() {
+            document.getElementById('time-val').textContent = t.toFixed(1);
+            document.getElementById('freq-val').textContent = freq.toFixed(1);
+            document.getElementById('arrows-val').textContent = n_arrows;
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+            gradient.addColorStop(0, '#eaf4fb');
+            gradient.addColorStop(1, '#d5e8f2');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const lam = 0.65 / freq * scale * 50;
+            const x_prop = t * 2.8 * scale * 50;
+            const wavelet_radii = [];
+            for (let r = lam; r <= x_prop; r += lam) {
+                wavelet_radii.push(r);
+            }
+            const n_wavelets = wavelet_radii.length;
+
+            document.getElementById('lambda-display').textContent = (0.65/freq).toFixed(2);
+            document.getElementById('n-wavelets').textContent = n_wavelets;
+            document.getElementById('physics-summary').innerHTML = 
+                `λ_rel = ${(0.65/freq).toFixed(2)} | Wavefront spacing = ${lam.toFixed(0)}px<br>`
+                + `N_wavelets = ${n_wavelets} (= ⌊${(t*2.8).toFixed(1)} / ${(0.65/freq).toFixed(2)}⌋)`;
+
+            // ── Wall (blocks BOTTOM → shadow = bottom right) ──
+            ctx.fillStyle = '#e74c3c';
+            ctx.fillRect(wall_x - 12, edge_y, 24, wall_bot - edge_y);  // ← BOTTOM half
+            ctx.strokeStyle = '#922b21';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(wall_x - 12, edge_y, 24, wall_bot - edge_y);
+            ctx.fillStyle = '#922b21';
+            ctx.font = 'bold 14px Segoe UI';
+            ctx.textAlign = 'left';
+            ctx.fillText('Wall', wall_x + 15, wall_bot - 8);
+
+            // ── LEFT: incident wavefronts (full height) ──
+            ctx.strokeStyle = '#2c3e50';
+            ctx.lineWidth = 2.5;
+            ctx.lineCap = 'round';
+            for (let x_wf = 50; x_wf < wall_x; x_wf += lam) {
+                ctx.beginPath();
+                ctx.moveTo(x_wf, 50);
+                ctx.lineTo(x_wf, canvas.height - 50);
+                ctx.stroke();
+            }
+
+            // ── Incident arrows (focused around edge_y) ──
+            ctx.strokeStyle = '#2980b9';
+            ctx.lineWidth = 2;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            for (let i = 0; i < n_arrows; i++) {
+                const yr = edge_y - 120 + 200 * i / (n_arrows - 1);
+                ctx.beginPath();
+                ctx.moveTo(wall_x - 80, yr);
+                ctx.lineTo(wall_x - 12, yr);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(wall_x - 12, yr - 4);
+                ctx.lineTo(wall_x - 8, yr);
+                ctx.lineTo(wall_x - 12, yr + 4);
+                ctx.fillStyle = '#2980b9';
+                ctx.fill();
+            }
+
+            if (show_shadow) {
+                // ── BOTTOM RIGHT shadow region ──
+                ctx.fillStyle = 'rgba(189, 195, 199, 0.35)';
+                ctx.fillRect(wall_x, edge_y, canvas.width - wall_x, canvas.height - edge_y);
+                ctx.setLineDash([8, 8]);
+                ctx.strokeStyle = '#7f8c8d';
+                ctx.lineWidth = 2.5;
+                ctx.beginPath();
+                ctx.moveTo(wall_x, edge_y);
+                ctx.lineTo(canvas.width - 50, edge_y);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.fillStyle = '#636e72';
+                ctx.font = 'bold 13px Segoe UI';
+                ctx.textAlign = 'center';
+                ctx.fillText('Shadow Region', canvas.width * 0.75, edge_y + 35);
+            }
+
+            // ── RIGHT TOP: lit region wavefronts (above wall, y < edge_y) ──
+            ctx.strokeStyle = '#2c3e50';
+            ctx.lineWidth = 2.5;
+            for (let x_wf = lam; x_wf < x_prop + lam; x_wf += lam) {
+                ctx.beginPath();
+                ctx.moveTo(wall_x + x_wf, 50);
+                ctx.lineTo(wall_x + x_wf, edge_y);
+                ctx.stroke();
+            }
+
+            // ── Huygens wavelets ──
+            ctx.lineWidth = 1.8;
+            for (let r of wavelet_radii) {
+                const theta_all = [];
+                for (let theta = -Math.PI; theta <= Math.PI; theta += 0.02) {
+                    const xw = wall_x + r * Math.cos(theta);
+                    const yw = edge_y  + r * Math.sin(theta);
+                    if (xw >= wall_x) theta_all.push({x: xw, y: yw});
+                }
+
+                // LIT region (above wall, solid red, drawn LAST = on top)
+                ctx.strokeStyle = '#e74c3c';
+                ctx.lineWidth = 1.8;
+                let in_lit = false;
+                for (let pt of theta_all) {
+                    if (pt.y <= edge_y) {  // ← ABOVE wall = y < edge_y
+                        if (!in_lit) {
+                            ctx.beginPath();
+                            in_lit = true;
+                        }
+                        if (in_lit) ctx.lineTo(pt.x, pt.y);
+                    } else {
+                        if (in_lit) {
+                            ctx.stroke();
+                            in_lit = false;
+                        }
+                    }
+                }
+                if (in_lit) ctx.stroke();
+
+                // ── SHADOW REGION (BELOW wall, purple dashed, drawn FIRST = BEHIND) ──
+                ctx.strokeStyle = '#8e44ad';
+                ctx.lineWidth = 1.6;
+                ctx.globalAlpha = 0.75;
+                ctx.setLineDash([6, 4]);
+                in_lit = false;
+                for (let pt of theta_all) {
+                    if (pt.y > edge_y) {   // ← BELOW wall = y > edge_y
+                        if (!in_lit) {
+                            ctx.beginPath();
+                            in_lit = true;
+                        }
+                        if (in_lit) ctx.lineTo(pt.x, pt.y);
+                    } else {
+                        if (in_lit) {
+                            ctx.stroke();
+                            in_lit = false;
+                        }
+                    }
+                }
+                if (in_lit) ctx.stroke();
+                ctx.globalAlpha = 1.0;
+                ctx.setLineDash([]);
+            }
+
+            // Diffraction edge marker
+            ctx.fillStyle = '#e74c3c';
+            ctx.beginPath();
+            ctx.arc(wall_x, edge_y, 6, 0, 2*Math.PI);
+            ctx.fill();
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+
+            if (show_env) {
+                // Lit envelope (green vertical line ABOVE wall)
+                ctx.strokeStyle = '#27ae60';
+                ctx.lineWidth = 4;
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                ctx.moveTo(wall_x + x_prop, 50);
+                ctx.lineTo(wall_x + x_prop, edge_y);
+                ctx.stroke();
+
+                // ── SHADOW ENVELOPE (purple arc BELOW wall in bottom region) ──
+                ctx.strokeStyle = '#8e44ad';
+                ctx.lineWidth = 3.5;
+                ctx.globalAlpha = 0.8;
+                ctx.setLineDash([10, 8]);
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                // Arc from right (x_prop, edge_y) → downward (wall_x, edge_y + x_prop)
+                for (let theta = 0; theta <= Math.PI/2; theta += 0.015) {  // ← REVERSED
+                    const x = wall_x + x_prop * Math.cos(theta);
+                    const y = edge_y  + x_prop * Math.sin(theta);
+                    if (theta === 0) ctx.moveTo(x, y);
+                    else ctx.lineTo(x, y);
+                }
+                ctx.stroke();
+                ctx.globalAlpha = 1.0;
+                ctx.setLineDash([]);
+
+                // Labels
+                ctx.fillStyle = '#27ae60';
+                ctx.font = 'bold 12px Segoe UI';
+                ctx.textAlign = 'center';
+                ctx.fillText('New wavefront (lit)', wall_x + x_prop, edge_y - 18);
+
+                ctx.fillStyle = '#8e44ad';
+                ctx.globalAlpha = 0.9;
+                ctx.fillText('New wavefront (shadow)', 
+                            wall_x + x_prop * 0.45, edge_y + x_prop * 0.35);
+                ctx.globalAlpha = 1.0;
+            }
+
+            // Parameter box
+            ctx.fillStyle = 'rgba(255,255,255,0.95)';
+            ctx.fillRect(20, 20, 340, 140);
+            ctx.strokeStyle = '#bdc3c7';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(20, 20, 340, 140);
+
+            ctx.fillStyle = '#2c3e50';
+            ctx.font = 'bold 15px Segoe UI';
+            ctx.textAlign = 'left';
+            ctx.fillText(`t = ${t.toFixed(1)}`, 35, 48);
+            ctx.fillText(`f_rel = ${freq.toFixed(1)}`, 35, 75);
+            ctx.fillText(`λ_rel = ${(0.65/freq).toFixed(2)}`, 35, 102);
+            ctx.fillStyle = '#27ae60';
+            ctx.font = 'bold 18px Segoe UI';
+            ctx.fillText(`N_wavelets = ${wavelet_radii.length}`, 35, 132);
+        }
+
+        // Event listeners
+        document.getElementById('time').addEventListener('input', (e) => {
+            t = parseFloat(e.target.value);
+            updateDisplays();
+            draw();
+        });
+        document.getElementById('freq').addEventListener('input', (e) => {
+            freq = parseFloat(e.target.value);
+            updateDisplays();
+            draw();
+        });
+        document.getElementById('arrows').addEventListener('input', (e) => {
+            n_arrows = parseInt(e.target.value);
+            updateDisplays();
+            draw();
+        });
+        document.getElementById('shadow').addEventListener('change', (e) => {
+            show_shadow = e.target.checked;
+            draw();
+        });
+        document.getElementById('env').addEventListener('change', (e) => {
+            show_env = e.target.checked;
+            draw();
+        });
+
+        updateDisplays();
+        draw();
+    </script>
+</body>
+</html>
